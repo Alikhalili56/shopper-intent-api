@@ -1,3 +1,6 @@
    ucimlrepo
    pandas
    scikit-learn
+   joblib
+   fastapi
+   uvicorn
