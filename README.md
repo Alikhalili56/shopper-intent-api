@@ -1,5 +1,7 @@
 # Shopper Intent API
 
+[![tests](https://github.com/Alikhalili56/shopper-intent-api/actions/workflows/tests.yml/badge.svg)](https://github.com/Alikhalili56/shopper-intent-api/actions/workflows/tests.yml)
+
 This project predicts whether an online shopping session ends in a purchase, based on browsing behaviour recorded during the session. It also measures how much performance depends on `PageValues`, an analytics feature that may leak information about the outcome.
 
 ## Data
