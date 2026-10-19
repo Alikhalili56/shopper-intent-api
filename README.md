@@ -2,82 +2,57 @@
 
 [![tests](https://github.com/Alikhalili56/shopper-intent-api/actions/workflows/tests.yml/badge.svg)](https://github.com/Alikhalili56/shopper-intent-api/actions/workflows/tests.yml)
 
-This project predicts whether an online shopping session ends in a purchase, based on browsing behaviour recorded during the session, and serves the model through a small API. The score is used for one decision: show a discount offer to hesitant visitors, but not to visitors who are likely to buy anyway. The main finding is that most of the predictive power comes from one feature, `PageValues`, which may leak information about the outcome.
+This project predicts whether an online shopping session ends in a purchase or not, using 12k sessions from a UCI dataset. The score decides whether to show a discount offer: hesitant visitors get it, likely buyers don't, because they would buy anyway. A gradient boosting model reaches a test PR-AUC of 0.741, compared with 0.156 for a dummy baseline that always predicts "no purchase". Most of this performance comes from one feature, `PageValues`, a Google Analytics metric calculated from purchases made on the site, which may include the session's own outcome. Without it, test PR-AUC drops from 0.741 to 0.370, so both results are reported.
 
 ## Data
-
-[Online Shoppers Purchasing Intention Dataset](https://archive.ics.uci.edu/dataset/468) from the UCI Machine Learning Repository (Sakar and Kastro, 2018): 12,330 browsing sessions from one online retailer over one year. 17 features, target `Revenue` (purchase or not). About 15.6% of sessions end in a purchase. Licence: CC BY 4.0. The data is downloaded by `scripts/download_data.py` and is not stored in this repo. 125 duplicate rows were removed before modelling.
+[Online Shoppers Purchasing Intention Dataset](https://archive.ics.uci.edu/dataset/468) (UCI, CC BY 4.0): 12,330 sessions from one retailer over one year, 17 features, target `Revenue`. 15.6% of sessions end in a purchase. 125 duplicate rows removed. Fetched with `scripts/download_data.py`; raw data is not committed.
 
 ## Method
-
-- **Models:** a dummy baseline (always "no purchase"), logistic regression, and gradient boosting (scikit-learn `HistGradientBoostingClassifier`). All use the same preprocessing (scaling for numeric columns, one-hot encoding for categorical ones) inside one pipeline.
-- **Metric:** PR-AUC (average precision). Only 15.6% of sessions are buyers, so accuracy is misleading: the dummy model reaches 84% accuracy while finding no buyers at all. PR-AUC measures how well the model ranks buyers above non-buyers. The no-skill level is 0.156.
-- **Protocol:** stratified 80/20 train/test split. Model comparison with 5-fold stratified cross-validation on the training set only. The decision threshold was chosen on out-of-fold training predictions and committed before the test set was opened. The test set was used once.
-- **Tuning:** a small grid search on gradient boosting gave 0.757 against 0.742 for the defaults, a gain within the fold-to-fold spread, so the defaults were kept.
+- **Models:** dummy (no-skill baseline), logistic regression (linear baseline), and `HistGradientBoostingClassifier` (non-linear). All share one scikit-learn pipeline: scaling for numeric features, one-hot encoding for categorical ones.
+- **Metric:** PR-AUC (average precision). With 15.6% buyers, accuracy is misleading: the dummy reaches 84% while finding no buyers. PR-AUC measures how well buyers are ranked above non-buyers, independent of any threshold. No-skill level: 0.156.
+- **Validation:** stratified 80/20 train/test split. Models compared with stratified 5-fold CV on the training set. The decision threshold was fixed on out-of-fold training predictions before the test set was used, once.
+- **Tuning:** a small grid search gave 0.757 vs 0.742 for default settings, within the fold-to-fold spread, so defaults were kept.
 
 ## Results
-
-| Model | CV PR-AUC (mean ± std) | Test PR-AUC |
+| Model | CV PR-AUC | Test PR-AUC |
 |---|---|---|
 | Dummy | 0.156 ± 0.000 | |
 | Logistic regression | 0.636 ± 0.022 | |
 | Gradient boosting | 0.742 ± 0.022 | 0.741 |
-| Gradient boosting without `PageValues` | 0.365 ± 0.016 | 0.370 |
+| Gradient boosting, no `PageValues` | 0.365 ± 0.016 | 0.370 |
 
-Test scores match the cross-validation estimates. Removing `PageValues` cuts PR-AUC by about half. This shows a strong dependence on that feature, which is consistent with leakage but does not prove it.
+Test scores match CV. Dropping `PageValues` halves PR-AUC: a strong dependence, consistent with leakage but not proof of it.
 
-**Decision threshold.** The threshold is the lowest score where precision on "buyer" reaches 0.8 on training predictions: **0.684**. On the test set this gives precision 0.790 and recall 0.463 (177 buyers correctly flagged, 47 non-buyers wrongly flagged, 205 buyers missed). Without `PageValues`, a precision of 0.8 is only reached at a recall of 0.002, so that model is not usable for this rule.
+**Decision threshold: 0.684**, the lowest score with precision ≥ 0.8 on out-of-fold training predictions. On the test set: precision 0.790, recall 0.463. Without `PageValues`, precision 0.8 is reached only at recall 0.002, so that model is not usable for this rule.
 
 ## Use case
-
-- Score at or above 0.684: likely buyer, no offer.
-- Score below 0.684: show the offer.
-
-Precision comes first because wrongly withholding an offer from a hesitant visitor can cost a whole sale, while an unneeded offer to a buyer only costs some margin.
+Score ≥ 0.684: likely buyer, no offer. Below: show the offer. Precision comes first because wrongly withholding an offer can lose a sale, while an unneeded offer only costs margin.
 
 ## How to run
-
-**Locally** (Python 3.14):
 ```bash
-python -m venv .venv
-source .venv/bin/activate
 pip install -r requirements-dev.txt
-uvicorn src.api:app --reload
+uvicorn src.api:app --reload          # http://127.0.0.1:8000/docs
+python -m pytest
 ```
-Then open http://127.0.0.1:8000/docs.
-
-**With Docker:**
+Docker:
 ```bash
 docker build -t shopper-intent-api .
 docker run -p 8000:8000 shopper-intent-api
 ```
 
-**Tests:**
-```bash
-python -m pytest
-```
-The same tests run on every push with GitHub Actions.
-
 ## API
+- `GET /health`
+- `POST /predict`: one session (17 fields, validated; invalid input returns 422) →
+  `{"score": 0.002, "likely_buyer": false, "show_offer": true}`
 
-- `GET /health` returns `{"message": "ok"}`.
-- `POST /predict` takes one session with all 17 features and returns a score and the decision. Invalid input (wrong type, out of range, unknown category) returns a 422 error.
-
-Example response:
-```json
-{"score": 0.002, "likely_buyer": false, "show_offer": true}
-```
-
-Months use three-letter names (`Jan` to `Dec`). The full input schema is shown on the `/docs` page.
+Months use three-letter names (`Jan` … `Dec`). Full schema on `/docs`.
 
 ## Limitations
-
-- `PageValues` is computed by Google Analytics from completed purchases. If it includes the session's own outcome, the scores are inflated, and in live use the value may not be available during a session.
-- The score ranks sessions; it is not a calibrated probability.
-- The model predicts who buys, not who changes their mind because of an offer. Measuring the effect of an offer would need an A/B test.
-- January and April do not appear in the training data; for these months the model scores without month information.
-- Input validation checks each field on its own, not whether fields make sense together.
+- `PageValues` may include the session's own purchase; in live use it may not be available during a session.
+- Scores rank sessions; they are not calibrated probabilities.
+- The model predicts who buys, not who responds to an offer; that needs an A/B test.
+- January and April are absent from training; those months are scored without month information.
+- Validation checks each field alone, not consistency between fields.
 
 ## Status
-
-v1.0: model, API, tests, CI and Docker image. Possible next steps: a training script that runs in CI, and storing sessions and predictions in PostgreSQL.
+v1.0: model, API, tests, CI, Docker. Next: training script in CI, PostgreSQL for sessions and predictions.
