@@ -221,3 +221,4 @@ __marimo__/
 data/
 models/*
 !models/hgb_pv.joblib
+!models/metrics.json
